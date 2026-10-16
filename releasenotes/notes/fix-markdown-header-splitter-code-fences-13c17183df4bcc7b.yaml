@@ -1,0 +1,6 @@
+---
+fixes:
+  - |
+    `MarkdownHeaderSplitter` now recognizes fenced code blocks the way CommonMark does, so `#` lines inside them
+    are no longer split out as headers. A closing fence may be longer than the opening fence, fences may be
+    indented by up to three spaces, and a code block that is never closed runs to the end of the document.

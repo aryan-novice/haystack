@@ -631,6 +631,65 @@ class TestCodeBlockExclusion:
         assert docs[1].meta["header"] == "Real Subheader"
         assert "not a header" not in [doc.meta["header"] for doc in docs]
 
+    @pytest.mark.parametrize(
+        "opening,closing",
+        [("````", "`````"), ("~~~~", "~~~~~"), ("````", "````")],
+        ids=["longer-backtick-closer", "longer-tilde-closer", "equal-length-closer"],
+    )
+    def test_closing_fence_at_least_as_long_as_opening(self, opening, closing):
+        """A closing fence may be longer than the opening fence, as CommonMark allows."""
+        text = f"# Intro\n{opening}python\n# fake\n{closing}\n## Real\nText.\n"
+        splitter = MarkdownHeaderSplitter()
+        docs = splitter.run(documents=[Document(content=text)])["documents"]
+
+        assert [doc.meta["header"] for doc in docs] == ["Intro", "Real"]
+        assert docs[0].content == f"# Intro\n{opening}python\n# fake\n{closing}\n"
+
+    def test_shorter_or_other_fence_does_not_close_block(self):
+        """A shorter fence, or a fence of the other character, stays inside the code block."""
+        text = "# Intro\n````\n```\n# fake one\n~~~~\n# fake two\n````\n## Real\nText.\n"
+        splitter = MarkdownHeaderSplitter()
+        docs = splitter.run(documents=[Document(content=text)])["documents"]
+
+        assert [doc.meta["header"] for doc in docs] == ["Intro", "Real"]
+
+    def test_fence_with_text_after_it_does_not_close_block(self):
+        """A fence line followed by an info string opens a block but cannot close one."""
+        text = "# Intro\n```\n# fake one\n```python\n# fake two\n```\n## Real\nText.\n"
+        splitter = MarkdownHeaderSplitter()
+        docs = splitter.run(documents=[Document(content=text)])["documents"]
+
+        assert [doc.meta["header"] for doc in docs] == ["Intro", "Real"]
+
+    def test_indented_fence(self):
+        """Fences indented by up to three spaces are recognised; four spaces is not a fence."""
+        text = "# Intro\n   ```\n# fake\n   ```\n## Real\nText.\n"
+        splitter = MarkdownHeaderSplitter()
+        docs = splitter.run(documents=[Document(content=text)])["documents"]
+        assert [doc.meta["header"] for doc in docs] == ["Intro", "Real"]
+
+        text = "# Intro\n    ```\n# Also real\n    ```\nText.\n"
+        docs = splitter.run(documents=[Document(content=text)])["documents"]
+        assert [doc.meta["header"] for doc in docs] == ["Intro", "Also real"]
+
+    def test_unclosed_fence_runs_to_end_of_document(self):
+        """An unclosed fenced code block extends to the end of the document."""
+        text = "# Intro\nSome text.\n```python\n# fake\nx = 1\n"
+        splitter = MarkdownHeaderSplitter()
+        docs = splitter.run(documents=[Document(content=text)])["documents"]
+
+        assert len(docs) == 1
+        assert docs[0].meta["header"] == "Intro"
+        assert docs[0].content == text
+
+    def test_backtick_line_with_backticks_in_info_is_not_a_fence(self):
+        """A backtick line whose info string contains backticks is inline code, not a fence."""
+        text = "# Intro\n```inline``` code\n# Real\nText.\n"
+        splitter = MarkdownHeaderSplitter()
+        docs = splitter.run(documents=[Document(content=text)])["documents"]
+
+        assert [doc.meta["header"] for doc in docs] == ["Intro", "Real"]
+
     def test_code_block_with_no_real_headers(self):
         """If the only hash lines are inside code blocks, the document is returned unchunked."""
         text = "Plain text before code.\n```\n# entirely fake\n```\nPlain text after code.\n"

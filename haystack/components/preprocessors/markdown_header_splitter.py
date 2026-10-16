@@ -83,24 +83,16 @@ class MarkdownHeaderSplitter:
         # the header text. Only spaces/tabs may surround it, with an optional carriage return for Windows line endings.
         self._closing_sequence_pattern = re.compile(r"(?:^|[ \t])#+[ \t]*\r?$")
 
-        # Matches fenced code blocks delimited by triple backticks (```) or triple tildes (~~~).
-        # Broken down:
-        #   ^                 - fence must start at the beginning of a line (MULTILINE)
+        # Matches a line that opens or closes a fenced code block, following CommonMark:
+        #   ^                 - fence line starts at the beginning of a line (MULTILINE)
+        #   [ ]{0,3}          - optional indentation of up to three spaces
         #   (?P<fence>`{3,}|~{3,})
-        #                     - named capture group "fence": three or more backticks OR three or
-        #                       more tildes. Capturing it allows the closing fence to be matched
-        #                       with a backreference, so ```-opened blocks must close with ```
-        #                       and ~~~-opened blocks must close with ~~~.
-        #   [^\n]*            - optional language identifier (e.g. "python") and any other text
-        #                       on the opening fence line, up to the newline
-        #   \n                - newline ending the opening fence line
-        #   .*?               - the code block body, matched lazily (DOTALL so . matches newlines)
-        #   ^(?P=fence)       - closing fence: must be identical to the opening fence (backreference),
-        #                       and must start at the beginning of a line
-        #   \s*$              - optional trailing whitespace after the closing fence
-        self._code_block_pattern = re.compile(
-            r"^(?P<fence>`{3,}|~{3,})[^\n]*\n.*?^(?P=fence)\s*$", re.MULTILINE | re.DOTALL
-        )
+        #                     - named capture group "fence": three or more backticks OR three or more tildes
+        #   (?P<info>[^\n]*)  - the rest of the line: an info string such as "python" on an opening fence, or
+        #                       only whitespace on a closing fence
+        # Whether a fence line closes the open block depends on the opening fence (same character, at least as
+        # many of them), which a backreference cannot express, so `_code_block_spans` pairs the fences up.
+        self._fence_line_pattern = re.compile(r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})(?P<info>[^\n]*)$", re.MULTILINE)
 
         self._is_warmed_up = False
 
@@ -122,8 +114,29 @@ class MarkdownHeaderSplitter:
             self._is_warmed_up = True
 
     def _code_block_spans(self, text: str) -> list[tuple[int, int]]:
-        """Return the (start, end) character spans of all fenced code blocks in text."""
-        return [(m.start(), m.end()) for m in self._code_block_pattern.finditer(text)]
+        """
+        Return the (start, end) character spans of all fenced code blocks in text.
+
+        Following CommonMark, a block is closed by a fence of the same character that is at least as long as the
+        opening fence and has nothing but whitespace after it. A block that is never closed runs to the end of the
+        text.
+        """
+        spans: list[tuple[int, int]] = []
+        open_fence: str | None = None
+        open_start = 0
+        for m in self._fence_line_pattern.finditer(text):
+            fence, info = m.group("fence"), m.group("info")
+            if open_fence is None:
+                # a backtick fence's info string cannot contain backticks, otherwise the line is inline code
+                if fence[0] == "`" and "`" in info:
+                    continue
+                open_fence, open_start = fence, m.start()
+            elif fence[0] == open_fence[0] and len(fence) >= len(open_fence) and not info.strip():
+                spans.append((open_start, m.end()))
+                open_fence = None
+        if open_fence is not None:
+            spans.append((open_start, len(text)))
+        return spans
 
     def _split_text_by_markdown_headers(self, text: str, doc_id: str) -> list[dict]:
         """
